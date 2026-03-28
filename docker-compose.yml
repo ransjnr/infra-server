@@ -1,0 +1,107 @@
+# Infra — Docker Compose stack.
+# Variable substitution uses your shell environment and a project-root `.env` file
+# (same directory as this file). Copy `.env.example` to `.env` and set secrets.
+
+x-app-env: &app-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql://infra:infra@postgres:5432/infra}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  GHANA_NLP_API_KEY: ${GHANA_NLP_API_KEY:-}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-infra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-infra}
+      POSTGRES_DB: ${POSTGRES_DB:-infra}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-infra} -d ${POSTGRES_DB:-infra}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    environment:
+      <<: *app-env
+      DATASET_MANAGER_URL: ${DATASET_MANAGER_URL:-http://dataset-manager:8001}
+      INTELLIGENCE_SERVICE_URL: ${INTELLIGENCE_SERVICE_URL:-http://intelligence:8002}
+      SPEECH_SERVICE_URL: ${SPEECH_SERVICE_URL:-http://speech:8003}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+    depends_on:
+      dataset-manager:
+        condition: service_started
+      intelligence:
+        condition: service_started
+      speech:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  dataset-manager:
+    build:
+      context: .
+      dockerfile: services/dataset-manager/Dockerfile
+    ports:
+      - "${DATASET_MANAGER_PORT:-8001}:8001"
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  intelligence:
+    build:
+      context: .
+      dockerfile: services/intelligence/Dockerfile
+    ports:
+      - "${INTELLIGENCE_PORT:-8002}:8002"
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  speech:
+    build:
+      context: .
+      dockerfile: services/speech/Dockerfile
+    ports:
+      - "${SPEECH_PORT:-8003}:8003"
+    environment:
+      <<: *app-env
+      INTELLIGENCE_SERVICE_URL: ${INTELLIGENCE_SERVICE_URL:-http://intelligence:8002}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      intelligence:
+        condition: service_started
+
+volumes:
+  postgres_data:
