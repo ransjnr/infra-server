@@ -1,0 +1,133 @@
+# Render Blueprint: Infra backend (gateway + 3 APIs + Postgres + Key Value).
+# Prerequisites:
+# - Connect this Git repo with ROOT = this directory (infra-server). If your repo root is a parent
+#   folder that only *contains* infra-server, set Blueprint root / each service "Root Directory" to
+#   infra-server in the Render dashboard, and keep dockerfilePath relative to that root (as below).
+#
+# After the first deploy, set PUBLIC_BASE_URL on the gateway to the gateway's own https://…onrender.com
+# URL (same as RENDER_EXTERNAL_URL) so Swagger "Try it out" targets the correct host.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+databases:
+  - name: infra-postgres
+    databaseName: infra
+    user: infra
+    region: oregon
+    plan: basic-256mb
+
+services:
+  - type: keyvalue
+    name: infra-redis
+    region: oregon
+    plan: free
+    ipAllowList: []
+
+  - type: web
+    name: infra-dataset-manager
+    runtime: docker
+    region: oregon
+    plan: free
+    dockerfilePath: ./services/dataset-manager/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: infra-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: infra-redis
+          property: connectionString
+
+  - type: web
+    name: infra-intelligence
+    runtime: docker
+    region: oregon
+    # Free instances have little RAM; upgrade this service if OOM during model load.
+    plan: free
+    dockerfilePath: ./services/intelligence/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: infra-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: infra-redis
+          property: connectionString
+      - key: GHANA_NLP_API_KEY
+        sync: false
+
+  - type: web
+    name: infra-speech
+    runtime: docker
+    region: oregon
+    plan: free
+    dockerfilePath: ./services/speech/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: infra-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: infra-redis
+          property: connectionString
+      - key: GHANA_NLP_API_KEY
+        sync: false
+      - key: INTELLIGENCE_SERVICE_URL
+        fromService:
+          type: web
+          name: infra-intelligence
+          envVarKey: RENDER_EXTERNAL_URL
+
+  - type: web
+    name: infra-gateway
+    runtime: docker
+    region: oregon
+    plan: free
+    dockerfilePath: ./services/gateway/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: infra-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: infra-redis
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AUTH_ENABLED
+        value: "true"
+      - key: DATASET_MANAGER_URL
+        fromService:
+          type: web
+          name: infra-dataset-manager
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: INTELLIGENCE_SERVICE_URL
+        fromService:
+          type: web
+          name: infra-intelligence
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: SPEECH_SERVICE_URL
+        fromService:
+          type: web
+          name: infra-speech
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: CORS_ORIGINS
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false

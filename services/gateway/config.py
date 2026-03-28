@@ -29,6 +29,10 @@ class Settings(BaseSettings):
         default=True,
         description="If false, /api/* proxies do not require a Bearer token (local dev only).",
     )
+    public_base_url: str = Field(
+        default="",
+        description="Public gateway URL (e.g. https://your-service.onrender.com) for OpenAPI servers in /docs.",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

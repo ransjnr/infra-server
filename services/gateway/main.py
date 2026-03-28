@@ -247,6 +247,9 @@ def custom_openapi() -> dict:
             schema_prefix="speech_",
             apply_bearer_security=apply_sec,
         )
+    base = settings.public_base_url.strip().rstrip("/")
+    if base:
+        openapi_schema["servers"] = [{"url": base}]
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 

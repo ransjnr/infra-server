@@ -17,4 +17,4 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8002
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]
+CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8002} --proxy-headers --forwarded-allow-ips='*'"]

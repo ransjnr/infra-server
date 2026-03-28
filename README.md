@@ -38,6 +38,29 @@ Optional overrides (see `.env.example`): `CORS_ORIGINS`, upstream URLs, ports, P
 - Token: `POST /auth/login` returns `access_token`; send `Authorization: Bearer <access_token>` on `/api/...` requests.
 - Direct access to ports **8001–8003** does not go through gateway auth; use the gateway in production-style setups.
 
+## Deploy on Render
+
+This repo includes a **[Render Blueprint](https://render.com/docs/infrastructure-as-code)** at [`render.yaml`](render.yaml): **Postgres**, **Key Value (Redis‑compatible)**, four **Docker web services** (dataset-manager, intelligence, speech, gateway), and wired env vars (`DATABASE_URL`, `REDIS_URL`, upstream `https://…onrender.com` URLs, generated `JWT_SECRET`).
+
+### Steps
+
+1. **Push** this `infra-server` tree to GitHub/GitLab/Bitbucket (or ensure Render can see it). If your Git **root is a parent folder** that only *contains* `infra-server`, either open a repo that uses `infra-server` as the root or, in Render, set **Root Directory** to `infra-server` for **each** web service and keep paths as in `render.yaml`.
+2. In the [Render Dashboard](https://dashboard.render.com/), choose **New → Blueprint**, connect the repo, and point Render at **`render.yaml`** (at the repo root for that service, usually the same folder as `docker-compose.yml`).
+3. Apply the Blueprint. When prompted, set **sync: false** secrets:
+   - **`GHANA_NLP_API_KEY`** (intelligence + speech)
+   - **`CORS_ORIGINS`** — your production frontend origin(s), comma‑separated (no spaces), e.g. `https://myapp.vercel.app`
+   - **`PUBLIC_BASE_URL`** — set to the gateway’s public URL once you know it (see below).
+4. Wait for all services to go **Live**. Postgres and the internal Redis URL are injected automatically; web apps listen on Render’s **`PORT`** (handled in the Dockerfiles).
+5. **Swagger host:** copy the **infra-gateway** service URL (`https://…onrender.com`, same as `RENDER_EXTERNAL_URL` in the dashboard) into **`PUBLIC_BASE_URL`** for **infra-gateway** (Environment → add or edit `PUBLIC_BASE_URL`), then **Manual Deploy** that service so `/docs` “Try it out” calls the correct HTTPS host.
+6. **Smoke test:** `GET https://<gateway>/health`, open `https://<gateway>/docs`, **register** / **login**, then call a proxied route with **Authorize**.
+
+### Operational notes
+
+- **Cost:** the Blueprint includes a **paid** Postgres plan (`basic-256mb` in `render.yaml`); adjust `plan` to match your workspace. Web services use the **free** instance type by default — they **spin down** when idle (cold starts, slow first request).
+- **Memory:** **intelligence** (PyTorch + Transformers) and **speech** (Whisper) often need more RAM than a free web instance provides. If builds succeed but the container crashes on startup, upgrade **infra-intelligence** and **infra-speech** to a paid instance type in the dashboard.
+- **Ephemeral disk:** model weights download to the container filesystem; they are **re-fetched after redeploys** unless you add a [persistent disk](https://render.com/docs/disks) and point caches there (not configured in this Blueprint).
+- **Security:** treat **8001–8003** backends as internal only; your public API should be **infra-gateway**. Restrict CORS to real frontend origins in production.
+
 ## Start the full stack
 
 From the **repository root** (where `docker-compose.yml` lives):
