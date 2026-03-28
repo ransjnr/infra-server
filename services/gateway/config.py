@@ -5,8 +5,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Upstream URLs and CORS (set via environment in Docker Compose)."""
+    """Upstream URLs, CORS, PostgreSQL, and JWT (set via environment in Docker Compose)."""
 
+    database_url: str = Field(
+        default="postgresql://infra:infra@postgres:5432/infra",
+        description="PostgreSQL URL (same DB as other services; gateway owns the `users` table).",
+    )
     dataset_manager_url: str = "http://dataset-manager:8001"
     intelligence_service_url: str = "http://intelligence:8002"
     speech_service_url: str = "http://speech:8003"
@@ -14,6 +18,16 @@ class Settings(BaseSettings):
     cors_origins: str = Field(
         default="*",
         description="Comma-separated origins, or * for any (dev only).",
+    )
+    jwt_secret: str = Field(
+        default="dev-only-change-JWT_SECRET-in-production",
+        description="HS256 signing key; set JWT_SECRET in production.",
+    )
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60 * 24 * 7
+    auth_enabled: bool = Field(
+        default=True,
+        description="If false, /api/* proxies do not require a Bearer token (local dev only).",
     )
 
     model_config = SettingsConfigDict(

@@ -1,6 +1,6 @@
 # Infra
 
-Infra is an AI data infrastructure monorepo: a FastAPI **gateway** reverse proxy, **dataset-manager** (PostgreSQL + SQLAlchemy), **intelligence** (Khaya translation + sentiment), **speech** (Whisper + intelligence), plus **PostgreSQL** and **Redis**.
+Infra is an AI data infrastructure monorepo: a FastAPI **gateway** (JWT auth + merged OpenAPI), **dataset-manager** (PostgreSQL + SQLAlchemy), **intelligence** (Khaya translation + sentiment), **speech** (Whisper + intelligence), plus **PostgreSQL** and **Redis**. User accounts live in PostgreSQL (`users` table); the gateway issues JWTs and protects `/api/*` (set `AUTH_ENABLED=false` only for local debugging).
 
 ## Prerequisites
 
@@ -26,8 +26,17 @@ Set at least:
 |----------|---------|
 | `GHANA_NLP_API_KEY` | Required for **intelligence** `/analyze` and **speech** (after transcription). Get a key from [Khaya / Ghana NLP](https://translation.ghananlp.org/). |
 | `DATABASE_URL` | Default inside Compose is `postgresql://infra:infra@postgres:5432/infra` — usually fine as-is for local Docker. |
+| `JWT_SECRET` | Signing key for gateway JWTs; set a strong random value in any shared or production environment. |
+| `AUTH_ENABLED` | Default `true`. When `true`, `/api/*` on the gateway requires `Authorization: Bearer <token>`. |
 
 Optional overrides (see `.env.example`): `CORS_ORIGINS`, upstream URLs, ports, Postgres credentials.
+
+## API docs (Swagger) and authentication
+
+- Open **`http://localhost:8000/docs`** (or your `GATEWAY_PORT`) for a **single** Swagger UI that lists gateway **authentication** routes and **merged** paths for dataset-manager, intelligence, and speech (tagged as “proxied”). Use **Authorize** and paste a JWT from `POST /auth/login`.
+- Register: `POST /auth/register` with JSON `{"email":"you@example.com","password":"yourpassword"}` (minimum 8 characters).
+- Token: `POST /auth/login` returns `access_token`; send `Authorization: Bearer <access_token>` on `/api/...` requests.
+- Direct access to ports **8001–8003** does not go through gateway auth; use the gateway in production-style setups.
 
 ## Start the full stack
 
@@ -50,7 +59,7 @@ docker compose down
 
 | Service | Container port | Host default | Role |
 |---------|----------------|--------------|------|
-| **gateway** | 8000 | 8000 | Reverse proxy: `/api/datasets/*`, `/api/intelligence/*`, `/api/speech/*` |
+| **gateway** | 8000 | 8000 | JWT auth (`/auth/*`), reverse proxy: `/api/datasets/*`, `/api/intelligence/*`, `/api/speech/*`, merged `/docs` |
 | **dataset-manager** | 8001 | 8001 | Datasets API + Postgres |
 | **intelligence** | 8002 | 8002 | Text analyze (Khaya + sentiment) |
 | **speech** | 8003 | 8003 | Transcribe audio → calls intelligence |
@@ -71,10 +80,11 @@ Replace host ports if you changed `GATEWAY_PORT`, `DATASET_MANAGER_PORT`, etc.
 curl -sS http://localhost:8000/health
 ```
 
-Proxied health (dataset-manager):
+Proxied health (dataset-manager; requires a JWT when `AUTH_ENABLED=true`):
 
 ```bash
-curl -sS http://localhost:8000/api/datasets/health
+curl -sS http://localhost:8000/api/datasets/health \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 ### Dataset-manager (direct)
@@ -91,10 +101,11 @@ curl -sS -X POST http://localhost:8001/datasets/ \
   -d "{\"name\":\"Sample corpus\",\"language\":\"tw\",\"type\":\"text\",\"file_url\":\"https://example.com/data.jsonl\",\"metadata\":{\"description\":\"This description is longer than fifty characters for scoring.\",\"tags\":[\"proverb\"]}}"
 ```
 
-Same path **through the gateway**:
+Same path **through the gateway** (add `Authorization` when `AUTH_ENABLED=true`):
 
 ```bash
 curl -sS -X POST http://localhost:8000/api/datasets/datasets/ \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"name\":\"Sample corpus\",\"language\":\"tw\",\"type\":\"text\",\"file_url\":\"https://example.com/data.jsonl\",\"metadata\":{\"description\":\"This description is longer than fifty characters for scoring.\",\"tags\":[\"proverb\"]}}"
 ```
@@ -117,6 +128,7 @@ Via gateway:
 
 ```bash
 curl -sS -X POST http://localhost:8000/api/intelligence/analyze \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"text\":\"Hello from Infra\"}"
 ```
@@ -136,7 +148,9 @@ curl -sS -X POST http://localhost:8003/transcribe -F "file=@/path/to/sample.wav"
 Via gateway:
 
 ```bash
-curl -sS -X POST http://localhost:8000/api/speech/transcribe -F "file=@/path/to/sample.wav"
+curl -sS -X POST http://localhost:8000/api/speech/transcribe \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -F "file=@/path/to/sample.wav"
 ```
 
 Speech calls intelligence after transcription; ensure `GHANA_NLP_API_KEY` is set.
