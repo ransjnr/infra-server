@@ -38,28 +38,69 @@ Optional overrides (see `.env.example`): `CORS_ORIGINS`, upstream URLs, ports, P
 - Token: `POST /auth/login` returns `access_token`; send `Authorization: Bearer <access_token>` on `/api/...` requests.
 - Direct access to ports **8001–8003** does not go through gateway auth; use the gateway in production-style setups.
 
-## Deploy on Render
+## Project structure (`infra-server`)
 
-This repo includes a **[Render Blueprint](https://render.com/docs/infrastructure-as-code)** at [`render.yaml`](render.yaml): **Postgres**, **Key Value (Redis‑compatible)**, four **Docker web services** (dataset-manager, intelligence, speech, gateway), and wired env vars (`DATABASE_URL`, `REDIS_URL`, upstream `https://…onrender.com` URLs, generated `JWT_SECRET`).
+```
+infra-server/
+├── docker-compose.yml          # Local stack: Postgres + Redis + 4 services
+├── render.yaml                 # Render Blueprint (Supabase DB + Render Key Value + 4 web services)
+├── .env.example                # Template for local `.env`
+├── requirements.txt            # Optional combined local installs
+├── shared/                     # Code shared by all Python services
+│   ├── logging_utils.py
+│   └── schemas.py
+└── services/
+    ├── gateway/                # JWT auth, reverse proxy, merged OpenAPI (/docs)
+    ├── dataset-manager/        # Datasets API + SQLAlchemy models (`datasets` table)
+    ├── intelligence/         # /analyze (Khaya + sentiment)
+    └── speech/                 # /transcribe (Whisper → intelligence)
+```
 
-### Steps
+Each service has its own `Dockerfile`, `requirements.txt`, and `main.py`. Docker build **context** is the `infra-server` root so Dockerfiles can `COPY shared/…` and `COPY services/<name>/…`.
 
-1. **Push** this `infra-server` tree to GitHub/GitLab/Bitbucket (or ensure Render can see it). If your Git **root is a parent folder** that only *contains* `infra-server`, either open a repo that uses `infra-server` as the root or, in Render, set **Root Directory** to `infra-server` for **each** web service and keep paths as in `render.yaml`.
-2. In the [Render Dashboard](https://dashboard.render.com/), choose **New → Blueprint**, connect the repo, and point Render at **`render.yaml`** (at the repo root for that service, usually the same folder as `docker-compose.yml`).
-3. Apply the Blueprint. When prompted, set **sync: false** secrets:
-   - **`GHANA_NLP_API_KEY`** (intelligence + speech)
-   - **`CORS_ORIGINS`** — your production frontend origin(s), comma‑separated (no spaces), e.g. `https://myapp.vercel.app`
-   - **`PUBLIC_BASE_URL`** — set to the gateway’s public URL once you know it (see below).
-4. Wait for all services to go **Live**. Postgres and the internal Redis URL are injected automatically; web apps listen on Render’s **`PORT`** (handled in the Dockerfiles).
-5. **Swagger host:** copy the **infra-gateway** service URL (`https://…onrender.com`, same as `RENDER_EXTERNAL_URL` in the dashboard) into **`PUBLIC_BASE_URL`** for **infra-gateway** (Environment → add or edit `PUBLIC_BASE_URL`), then **Manual Deploy** that service so `/docs` “Try it out” calls the correct HTTPS host.
-6. **Smoke test:** `GET https://<gateway>/health`, open `https://<gateway>/docs`, **register** / **login**, then call a proxied route with **Authorize**.
+## Deploy on Render (with Supabase Postgres)
+
+The Blueprint in [`render.yaml`](render.yaml) provisions **Render Key Value** (Redis‑compatible) and **four Docker web services**. **PostgreSQL is not created on Render** — use **[Supabase](https://supabase.com)** (free tier) or any hosted Postgres, then set **`DATABASE_URL`** on each web service.
+
+### A. Create the database on Supabase
+
+1. Sign in at [supabase.com](https://supabase.com) → **New project** (choose a region close to your Render region, e.g. US West).
+2. Wait until the project is ready. Open **Project Settings → Database**.
+3. Under **Connection string**, choose **URI** and copy the string. Prefer the **Session pooler** (or **Transaction pooler**) on port **6543** when four services connect to the same DB, so you do not hit the direct connection limit. Replace `[YOUR-PASSWORD]` with your database password.
+4. Ensure the URI includes SSL, e.g. `?sslmode=require` at the end (Supabase often adds this in the copy‑paste string).
+5. You do **not** need to create tables manually first: **dataset-manager** and **gateway** call SQLAlchemy `create_all` on startup for `datasets` and `users`.
+
+### B. Apply the Render Blueprint
+
+1. **Push** this repo so Render can clone it (Git root should be **`infra-server`**, or set **Root Directory** to `infra-server` for each Docker service if the repo root is higher).
+2. In the [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** → connect the repo → select **`render.yaml`**.
+3. When Render prompts for **`sync: false`** variables, provide:
+   - **`DATABASE_URL`** — paste the **same** Supabase URI for **each** of the four web services when asked (dataset-manager, intelligence, speech, gateway each declare their own `DATABASE_URL`; identical value is correct).
+   - **`GHANA_NLP_API_KEY`** — intelligence and speech (two prompts).
+   - **`CORS_ORIGINS`** — e.g. `https://your-app.vercel.app` (comma‑separated, no spaces).
+   - **`PUBLIC_BASE_URL`** — leave blank or placeholder for now; set after step 4.
+4. Wait until **infra-redis** and all four web services are **Live**. **`REDIS_URL`**, upstream **`RENDER_EXTERNAL_URL`** links, and **`JWT_SECRET`** are applied by the Blueprint.
+
+### C. Finish gateway URL and Swagger
+
+1. Open the **infra-gateway** service → copy its **`https://….onrender.com`** URL.
+2. **Environment** → set **`PUBLIC_BASE_URL`** to that exact URL (no trailing slash) → **Save** → **Manual Deploy** infra-gateway so `/docs` “Try it out” uses HTTPS.
+
+### D. Smoke test
+
+- `GET https://<gateway>/health`
+- `https://<gateway>/docs` → register → login → **Authorize** → try a proxied route.
+
+### Optional: fewer secret prompts
+
+After the first deploy, you can create a Render [**Environment Group**](https://render.com/docs/configure-environment-variables#environment-groups) holding **`DATABASE_URL`** (and other shared secrets), attach it to all four web services, and remove duplicate `DATABASE_URL` entries from `render.yaml` on the next Blueprint sync (advanced).
 
 ### Operational notes
 
-- **Cost:** the Blueprint includes a **paid** Postgres plan (`basic-256mb` in `render.yaml`); adjust `plan` to match your workspace. Web services use the **free** instance type by default — they **spin down** when idle (cold starts, slow first request).
-- **Memory:** **intelligence** (PyTorch + Transformers) and **speech** (Whisper) often need more RAM than a free web instance provides. If builds succeed but the container crashes on startup, upgrade **infra-intelligence** and **infra-speech** to a paid instance type in the dashboard.
-- **Ephemeral disk:** model weights download to the container filesystem; they are **re-fetched after redeploys** unless you add a [persistent disk](https://render.com/docs/disks) and point caches there (not configured in this Blueprint).
-- **Security:** treat **8001–8003** backends as internal only; your public API should be **infra-gateway**. Restrict CORS to real frontend origins in production.
+- **Cost:** no Render-managed Postgres in this Blueprint; Supabase free tier has its own limits. Render **Key Value** and **free web** instances may still require a card on file depending on your Render account policy.
+- **Memory:** **intelligence** and **speech** may **OOM** on free Render RAM; upgrade those instance types if containers exit after boot.
+- **Ephemeral disk:** models re-download after redeploy unless you add persistent disk / external cache.
+- **Security:** use **infra-gateway** as the public API; keep **`CORS_ORIGINS`** tight in production.
 
 ## Start the full stack
 

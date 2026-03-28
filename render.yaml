@@ -1,20 +1,19 @@
-# Render Blueprint: Infra backend (gateway + 3 APIs + Postgres + Key Value).
-# Prerequisites:
-# - Connect this Git repo with ROOT = this directory (infra-server). If your repo root is a parent
-#   folder that only *contains* infra-server, set Blueprint root / each service "Root Directory" to
-#   infra-server in the Render dashboard, and keep dockerfilePath relative to that root (as below).
+# Render Blueprint: Infra backend (gateway + 3 APIs + Render Key Value + external Postgres).
 #
-# After the first deploy, set PUBLIC_BASE_URL on the gateway to the gateway's own https://…onrender.com
-# URL (same as RENDER_EXTERNAL_URL) so Swagger "Try it out" targets the correct host.
+# PostgreSQL is expected from Supabase (or any Postgres URL). Set the same DATABASE_URL on every
+# web service when Render prompts during Blueprint setup (sync: false), or paste it later under
+# each service → Environment.
+#
+# Supabase: Project Settings → Database → Connection string → URI (prefer "Session pooler" /
+# port 6543 when four services share the DB so you do not exhaust connections). Append sslmode=require
+# if your client string does not already include it.
+#
+# Repo root should be this directory (infra-server). If Git root is a parent folder, set Root
+# Directory to infra-server for each Docker web service in the dashboard.
+#
+# After deploy, set PUBLIC_BASE_URL on infra-gateway to the gateway https://…onrender.com URL.
 #
 # Docs: https://render.com/docs/blueprint-spec
-
-databases:
-  - name: infra-postgres
-    databaseName: infra
-    user: infra
-    region: oregon
-    plan: basic-256mb
 
 services:
   - type: keyvalue
@@ -33,9 +32,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: infra-postgres
-          property: connectionString
+        sync: false
       - key: REDIS_URL
         fromService:
           type: keyvalue
@@ -46,16 +43,13 @@ services:
     name: infra-intelligence
     runtime: docker
     region: oregon
-    # Free instances have little RAM; upgrade this service if OOM during model load.
     plan: free
     dockerfilePath: ./services/intelligence/Dockerfile
     dockerContext: .
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: infra-postgres
-          property: connectionString
+        sync: false
       - key: REDIS_URL
         fromService:
           type: keyvalue
@@ -74,9 +68,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: infra-postgres
-          property: connectionString
+        sync: false
       - key: REDIS_URL
         fromService:
           type: keyvalue
@@ -100,9 +92,7 @@ services:
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: infra-postgres
-          property: connectionString
+        sync: false
       - key: REDIS_URL
         fromService:
           type: keyvalue
